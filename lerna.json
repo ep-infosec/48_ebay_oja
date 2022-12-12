@@ -1,0 +1,19 @@
+{
+  "npmClient": "yarn",
+  "command": {
+    "publish": {
+      "conventionalCommits": true
+    }
+  },
+  "packages": [
+    "packages/examples",
+    "packages/oja-*",
+    "packages/hygen-oja-*"
+  ],
+  "ignoreChanges": [
+    "**/__tests__/**",
+    "**/test/**",
+    "**/*.md"
+  ],
+  "version": "independent"
+}

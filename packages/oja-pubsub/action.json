@@ -1,0 +1,8 @@
+{
+    "oja/route": "route",
+    "oja/dispatch": "dispatch",
+    "oja/subscribe": "subscribe",
+    "oja/unsubscribe": "unsubscribe",
+    "oja/pubsub": "pubsub",
+    "oja/extension/context/reset": "reset"
+}

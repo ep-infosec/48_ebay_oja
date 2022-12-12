@@ -1,0 +1,251 @@
+---
+to: .hygen.oja.js
+---
+'use strict';
+
+process.on('unhandledRejection', (err) => {
+    console.error(err.stack);
+    process.exit(1);
+});
+
+class HygenOja {
+    constructor() {
+        this.helpers = {};
+        this.helpers.generatorDependencies = this.helpers.generatorDependencies || {};
+        this.helpers.generatorDependencies.action = [
+            '@ebay/oja-action',
+            '@ebay/oja-context'
+        ];
+        this.helpers.generatorDependencies.mocha = [
+            'nyc',
+            'mocha'
+        ];
+        this.helpers.generatorDependencies.jest = [
+            'jest'
+        ];
+
+        Object.assign(this.helpers, {
+            throwError(message) {
+                console.error(`Error: ${message}`);
+                process.exit(1);
+            },
+
+            accessor(name) {
+                return /-/.test(name) ? `['${name}']` : `.${name}`;
+            },
+
+            actionName(name) {
+                return name.split('/').pop();
+            },
+
+            require(name) {
+                return require(name);
+            },
+
+            isEmptyPath(json = {}, path) {
+                const data = this.get(json, path) || [];
+                return Object.keys(data).length === 0;
+            },
+
+            Path: require('path'),
+
+            assertActionLocation(target) {
+                if (this.locationActionFileExists() &&
+                    process.cwd() === this.Path.resolve(target)) {
+                    this.throwError('Error: action.json cannot be placed' +
+                        ' at the root of the app or module');
+                }
+            },
+
+            locationActionFileExists() {
+                const action = this.tryRequire(this.Path.resolve(process.cwd(), 'action.json'));
+                return action && Array.isArray(action);
+            },
+
+            sourceFromTarget(target) {
+                const relative = require('relative');
+                // in addition to relative path, we need to make sure
+                return target && relative(process.cwd(), target);
+            },
+
+            get(json = {}, path) {
+                let current = json;
+                const keys = path.split('.');
+                for (let i = 0; i < keys.length; i++) {
+                    current = current[keys[i]];
+                    if (current === undefined) {
+                        return;
+                    }
+                }
+                return current;
+            },
+
+            detectedTestFramework(properties) {
+                const type = properties.mocha ? 'mocha' : 'jest';
+                this.assert.ok(/^(jest|mocha)$/, `Only mocha or jest supported so far, requested: "${type}"`);
+                if (type) {
+                    return type;
+                }
+                const pkg = require(`./package.json`);
+                return /mocha/.test(this.get(pkg, 'scripts.test:actions')) ? 'mocha' : (type || 'jest');
+            },
+
+            getTestMatch(type) {
+                if (type === 'mocha') {
+                    return `**/${this.unitTestFolderName(type)}/**/*.spec.js --exclude node_modules`;
+                }
+                return `**/${this.unitTestFolderName(type)}/**/*.spec.js`;
+            },
+
+            testCaseName(properties) {
+                const type = this.detectedTestFramework(properties);
+                return type === 'mocha' ? 'it' : 'test';
+            },
+
+            tryRequire(name, defaultVal) {
+                try {
+                    return require(name);
+                } catch (err) {
+                    try {
+                        return require(this.Path.resolve(process.cwd(), name));
+                    } catch (err) {
+                        return defaultVal;
+                    }
+                }
+            },
+
+            installDependenciesCmd(generator, option = '') {
+                const requiredDevDependencies = this.generatorDependencies[generator];
+                const dependencies = requiredDevDependencies &&
+                    requiredDevDependencies.filter(dep => !this.fs.existsSync(`./node_modules/${dep}`));
+
+                return dependencies && dependencies.length &&
+                    `cd ${process.cwd()} && yarn add ${dependencies.join(' ')} ${option}` ||
+                    'echo Nothing to install';
+            },
+
+            existsSync(name) {
+                return this.fs.existsSync(name);
+            },
+
+            writeTo(path, content) {
+                return this.fs.writeFileSync(path, content);
+            },
+
+            getTabLength(filePath, defaultLen = 4) {
+                if (!this.fs.existsSync(filePath)) {
+                    return defaultLen;
+                }
+                const content = this.fs.readFileSync(filePath).toString();
+                const tabMatch = content.match(/\n(\s+)/);
+                return tabMatch && tabMatch[1].length || 4;
+            },
+
+            loadJSONFile(path) {
+                const content = this.fs.readFileSync(path).toString();
+
+                return JSON.parse(content);
+            },
+
+            updateRootAction(properties) {
+                if (this.locationActionFileExists()) {
+                    const actionLocation = this.sourceFromTarget(properties.target);
+                    if (!actionLocation) {
+                        return `> action location already registered`;
+                    }
+                    const rootActionLocation = this.Path.resolve(process.cwd(), 'action.json');
+                    const action = this.fs.existsSync(rootActionLocation) ?
+                        this.loadJSONFile(rootActionLocation) : {};
+                    if (action.indexOf(actionLocation) > -1) {
+                        return `> action location already exists in root ${actionLocation}, skipping`;
+                    }
+                    action.push(actionLocation);
+                    const tabLen = this.getTabLength(rootActionLocation);
+                    this.fs.writeFileSync(rootActionLocation, JSON.stringify(action, null, tabLen));
+                }
+            },
+
+            assert: require('assert'),
+
+            fs: require('fs'),
+
+            shell: require('shelljs'),
+
+            addToActionJson(properties) {
+                const actionNamespace = properties.name;
+                this.assert(actionNamespace, 'Action name must be provided');
+
+                this.assertActionLocation(properties.target || '.');
+
+                const actionJsonLocation = this.Path.resolve(properties.target || '.', 'action.json');
+
+                let actionJson = {};
+                if (this.existsSync(actionJsonLocation)) {
+                    actionJson = this.loadJSONFile(actionJsonLocation);
+                }
+
+                const actionName = this.actionName(actionNamespace);
+                if (!actionJson[actionNamespace]) {
+                    actionJson[actionNamespace] = actionName;
+                    const parentPath = this.Path.resolve(actionJsonLocation, '..');
+                    if (!this.fs.existsSync(parentPath)) {
+                        this.shell.mkdir('-p', parentPath);
+                    }
+                    const tabLen = this.getTabLength(actionJsonLocation);
+                    this.writeTo(actionJsonLocation, JSON.stringify(actionJson, null, tabLen));
+                    return `> added new action namespace ${actionNamespace} to ${actionJsonLocation}`;
+                }
+            },
+
+            updatePackage(properties) {
+                const messages = [];
+                const pkgLocation = require.resolve('./package.json');
+                const tabLen = this.getTabLength(pkgLocation);
+                const pkg = this.loadJSONFile(pkgLocation);
+                if (!pkg.scripts) {
+                    pkg.scripts = {};
+                    messages.push(`> added scripts section`);
+                }
+                const type = this.detectedTestFramework(properties);
+                if (!pkg.scripts['test:actions']) {
+                    pkg.scripts['test:actions'] = type === 'mocha' ?
+                        `mocha ${this.getTestMatch('mocha')} --exit --timeout 10000` :
+                        `jest`;
+                    messages.push('> added test:actions to scripts section');
+                }
+                if (!pkg.scripts['test:actions:coverage']) {
+                    pkg.scripts['test:actions:coverage'] = type === 'mocha' ?
+                        `nyc npm run test:actions` :
+                        `jest --collect-coverage`;
+                    messages.push('> added test:actions:coverage to scripts section');
+                }
+                if (type === 'jest') {
+                    if (!pkg.jest) {
+                        pkg.jest = {};
+                    }
+                    if (!pkg.jest.testMatch) {
+                        pkg.jest.testMatch = [];
+                    }
+                    const testMatchStr = this.getTestMatch('jest');
+                    if (pkg.jest.testMatch.indexOf(testMatchStr) === -1) {
+                        pkg.jest.testMatch.push(testMatchStr);
+                    }
+                }
+
+                // conclusion
+                if (messages.length) {
+                    this.writeTo(pkgLocation, JSON.stringify(pkg, null, tabLen));
+                    return [`> Updated package.json:`, ...messages].join('\n\t');
+                }
+                return `> test scripts are already in package.json`;
+            },
+
+            unitTestFolderName(type) {
+                return '__tests__';
+            }
+
+        });
+    }
+}
+
+module.exports = HygenOja;
